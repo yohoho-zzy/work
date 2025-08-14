@@ -23,6 +23,8 @@ import com.hitachi.drivermng.common.Constant
 import com.hitachi.drivermng.common.ErrorLogLevelEnum
 import com.hitachi.drivermng.common.LongTimeStopVibration
 import com.hitachi.drivermng.common.OppLoggerTypeEnum
+import com.hitachi.drivermng.data.vo.AlertItem
+import com.hitachi.drivermng.data.vo.AlertQueue
 import com.hitachi.drivermng.data.vo.AppData
 import com.hitachi.drivermng.data.vo.HistoryItem
 import com.hitachi.drivermng.data.vo.LongTimeStopData
@@ -31,7 +33,6 @@ import com.hitachi.drivermng.util.*
 import com.hitachi.drivermng.util.DateUtil.Companion.getCurrentDateWithFormate
 import com.hitachi.drivermng.view.MainActivity
 import java.io.File
-import java.text.SimpleDateFormat
 import java.util.*
 
 /**
@@ -79,9 +80,6 @@ class LongTimeStopAlertService : Service() {
     private var isManage = AppData.userInfo?.isManager == true
     //alertBackgroundStartReceiver
     private var alertBackgroundStartReceiver: BroadcastReceiver? =null
-
-    //
-//    private var alertCountUpTime: Long = 0
 
     private var isLongTimeStop: Boolean = false
     private var alertDialog = IOSDialog.Builder(AppData.mainContext!!)
@@ -367,48 +365,50 @@ class LongTimeStopAlertService : Service() {
 
             if (AlertQueue.queue.isNotEmpty()) {
                 val first = AlertQueue.queue.peek()
-                if (first.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
-                    if (isDialogShowing()) {
-                        alertDialog.dismiss()
-                    }
-                    //バックグラウンド 状態
-                    if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
-                        if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_LONGTIMESTOP)) {
-                            if (AppData.appConfig!!.longTimeStopRepetition) {
+                if (first != null) {
+                    if (first.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
+                        if (isDialogShowing()) {
+                            alertDialog.dismiss()
+                        }
+                        //バックグラウンド 状態
+                        if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
+                            if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_LONGTIMESTOP)) {
+                                if (AppData.appConfig!!.longTimeStopRepetition) {
+                                    //アラートの音声出力
+                                    MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                                    //バイブ動作
+                                    vibratorAction()
+                                }
+                            } else {
                                 //アラートの音声出力
                                 MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
                                 //バイブ動作
                                 vibratorAction()
                             }
+                            //ヘッドアップ通知の表示
+                            NotificationUtil.createNotification(AppData.mainContext!!, NOTIFICATION_TYPE_LONGTIMESTOP)
                         } else {
-                            //アラートの音声出力
-                            MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                            //バイブ動作
-                            vibratorAction()
+                            //フォアグラウンド
+                            if (isDialogShowing()) {
+                                if (AppData.appConfig!!.longTimeStopRepetition) {
+                                    //アラートの音声出力
+                                    MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                                    //バイブ動作
+                                    vibratorAction()
+                                }
+                            } else {
+                                //アラートの音声出力
+                                MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                                //バイブ動作
+                                vibratorAction()
+                                //ダイアログの 表示
+                                broadcastAlertShowStatus(true)
+                            }
                         }
-                        //ヘッドアップ通知の表示
-                        NotificationUtil.createNotification(AppData.mainContext!!, NOTIFICATION_TYPE_LONGTIMESTOP)
                     } else {
-                        //フォアグラウンド
-                        if (alertDialog != null && isDialogShowing()) {
-                            if (AppData.appConfig!!.longTimeStopRepetition) {
-                                //アラートの音声出力
-                                MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                                //バイブ動作
-                                vibratorAction()
-                            }
-                        } else {
-                            //アラートの音声出力
-                            MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                            //バイブ動作
-                            vibratorAction()
-                            //ダイアログの 表示
-                            broadcastAlertShowStatus(true)
-                        }
+                        // SOS通知が先頭の場合はSOSサービスへ通知
+                        AppData.sosNoticeAlertService?.checkSosAlertShow()
                     }
-                } else {
-                    // SOS通知が先頭の場合はSOSサービスへ通知
-                    AppData.sosNoticeAlertService?.checkSosAlertShow()
                 }
             }
         }
@@ -459,7 +459,7 @@ class LongTimeStopAlertService : Service() {
     /**
      * 次長時間停止アラートの表示
      */
-    private fun handleNextAlert(isFromOtherDialog: Boolean){
+    private fun handleNextAlert(){
         try {
             if (isDialogShowing()) {
                 alertDialog.dismiss()
@@ -467,7 +467,7 @@ class LongTimeStopAlertService : Service() {
             val currentItem = AlertQueue.queue.peek()
             if (currentItem != null && currentItem.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
                 val currentAlertData = currentItem.longTimeStopData
-                if (!isFromOtherDialog && currentAlertData != null) {
+                if (currentAlertData != null) {
                     val prefix = this.alertInfoPhonePath + currentAlertData.fileFullName
                     val sdf = getCurrentDateWithFormate("yyyyMMdd")
                     val currentDate = sdf.format(Date())
@@ -495,7 +495,7 @@ class LongTimeStopAlertService : Service() {
     fun displayAlertCheck() {
         if (AlertQueue.queue.isNotEmpty()) {
             val first = AlertQueue.queue.peek()
-            if (first.type != NOTIFICATION_TYPE_LONGTIMESTOP) {
+            if (first != null && first.type != NOTIFICATION_TYPE_LONGTIMESTOP) {
                 AppData.sosNoticeAlertService?.checkSosAlertShow()
                 return
             }
@@ -509,7 +509,7 @@ class LongTimeStopAlertService : Service() {
      */
     private fun displayAlert() {
         if (AlertQueue.queue.isNotEmpty()) {
-            val first = AlertQueue.queue.peek()
+            val first = AlertQueue.queue.peek() ?: return
             if (first.type != NOTIFICATION_TYPE_LONGTIMESTOP) {
                 AppData.sosNoticeAlertService?.checkSosAlertShow()
                 return
@@ -591,7 +591,7 @@ class LongTimeStopAlertService : Service() {
     private fun doNextAlert(id: String) {
         cancelRepeatAlert()
         //次長時間停止アラートの処理
-        handleNextAlert(false)
+        handleNextAlert()
         // 操作ログ記録と送信
         LoggerHelper.writeOppLogger(
             OppLoggerTypeEnum.OPP_LONG_TIME_STOP_ALERT,
