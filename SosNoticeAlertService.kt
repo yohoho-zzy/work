@@ -40,7 +40,7 @@ class SosNoticeAlertService : Service() {
     private var isSosNotice: Boolean = false
     private var sosNoticeAlertLinkedQueue: UniqueLinkedQueue<SosNoticeData> = UniqueLinkedQueue()
     private var alertDialog = IOSDialog.Builder(AppData.mainContext!!)
-    private val alertInfoBucketName = "hitachi-lotelema-jp-test-alert"
+    private val alertInfoBucketName = AppData.appConfig!!.alertInfoBucket
     private val alertInfoLogPath = Constant.SOS_NOTICE_ALERT + "/"
     private val repeatAlertHandler = Handler(Looper.getMainLooper())
     private var repeatAlertRunnable: Runnable? = null
