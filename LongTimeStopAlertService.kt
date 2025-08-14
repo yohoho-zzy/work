@@ -26,7 +26,6 @@ import com.hitachi.drivermng.common.OppLoggerTypeEnum
 import com.hitachi.drivermng.data.vo.AppData
 import com.hitachi.drivermng.data.vo.HistoryItem
 import com.hitachi.drivermng.data.vo.LongTimeStopData
-import com.hitachi.drivermng.data.vo.UniqueLinkedQueue
 import com.hitachi.drivermng.repository.AwsRepository
 import com.hitachi.drivermng.util.*
 import com.hitachi.drivermng.util.DateUtil.Companion.getCurrentDateWithFormate
@@ -85,7 +84,6 @@ class LongTimeStopAlertService : Service() {
 //    private var alertCountUpTime: Long = 0
 
     private var isLongTimeStop: Boolean = false
-    var longTimeStopAlertLinkedQueue: UniqueLinkedQueue<LongTimeStopData> = UniqueLinkedQueue()
     private var alertDialog = IOSDialog.Builder(AppData.mainContext!!)
     private val alertInfoBucketName = AppData.appConfig!!.alertInfoBucket
     private val alertInfoPhonePath = Constant.BUCKET_KEY_LONG_TIME_ALERT + "/"
@@ -276,7 +274,6 @@ class LongTimeStopAlertService : Service() {
             }
         }, 0, LONG_TIME_STOP_INTERVAL.toLong())
 
-        longTimeStopAlertLinkedQueue.clear()
     }
 
     private fun isNeedExecute(): Boolean {
@@ -351,49 +348,67 @@ class LongTimeStopAlertService : Service() {
             }
         }
         (AppData.mainContext as MainActivity).runOnUiThread {
-            longTimeStopAlertLinkedQueue.clear()
-            if (isDialogShowing()) {
-                alertDialog.dismiss()
+            // 既存キューから長時間停止データを除去し、新規データを統合して時刻順に並べる
+            val remain = mutableListOf<AlertItem>()
+            AlertQueue.queue.forEach { if (it.type != NOTIFICATION_TYPE_LONGTIMESTOP) remain.add(it) }
+            val newItems = mutableListOf<AlertItem>()
+            longTimeStopDataList.forEach {
+                newItems.add(
+                    AlertItem(
+                        it.longTimeStopOccurrenceTime,
+                        NOTIFICATION_TYPE_LONGTIMESTOP,
+                        longTimeStopData = it
+                    )
+                )
             }
-            repeat(longTimeStopDataList.size) {
-                longTimeStopAlertLinkedQueue.offer(longTimeStopDataList[it])
-            }
-            if (longTimeStopDataList.size > 0) {
-                //バックグラウンド 状態
-                if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
-                    if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_LONGTIMESTOP)) {
-                        if (AppData.appConfig!!.longTimeStopRepetition) {
+            val sorted = (remain + newItems).sortedBy { item -> item.alertTime }
+            AlertQueue.queue.clear()
+            sorted.forEach { AlertQueue.queue.offer(it) }
+
+            if (AlertQueue.queue.isNotEmpty()) {
+                val first = AlertQueue.queue.peek()
+                if (first.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
+                    if (isDialogShowing()) {
+                        alertDialog.dismiss()
+                    }
+                    //バックグラウンド 状態
+                    if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
+                        if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_LONGTIMESTOP)) {
+                            if (AppData.appConfig!!.longTimeStopRepetition) {
+                                //アラートの音声出力
+                                MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                                //バイブ動作
+                                vibratorAction()
+                            }
+                        } else {
                             //アラートの音声出力
                             MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
                             //バイブ動作
                             vibratorAction()
                         }
+                        //ヘッドアップ通知の表示
+                        NotificationUtil.createNotification(AppData.mainContext!!, NOTIFICATION_TYPE_LONGTIMESTOP)
                     } else {
-                        //アラートの音声出力
-                        MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                        //バイブ動作
-                        vibratorAction()
+                        //フォアグラウンド
+                        if (alertDialog != null && isDialogShowing()) {
+                            if (AppData.appConfig!!.longTimeStopRepetition) {
+                                //アラートの音声出力
+                                MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                                //バイブ動作
+                                vibratorAction()
+                            }
+                        } else {
+                            //アラートの音声出力
+                            MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
+                            //バイブ動作
+                            vibratorAction()
+                            //ダイアログの 表示
+                            broadcastAlertShowStatus(true)
+                        }
                     }
-                    //ヘッドアップ通知の表示
-                    NotificationUtil.createNotification(AppData.mainContext!!, NOTIFICATION_TYPE_LONGTIMESTOP)
                 } else {
-                    //フォアグラウンド
-                    //ダイアログが表示されている
-                    if (alertDialog != null && isDialogShowing()) {
-                        if (AppData.appConfig!!.longTimeStopRepetition) {
-                            //アラートの音声出力
-                            MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                            //バイブ動作
-                            vibratorAction()
-                        }
-                    } else {
-                        //アラートの音声出力
-                        MediaPlayerUtil.play(AppData.mainContext!!, R.raw.long_time_stop_alert, stopInSeconds) {}
-                        //バイブ動作
-                        vibratorAction()
-                        //ダイアログの 表示
-                        broadcastAlertShowStatus(true)
-                    }
+                    // SOS通知が先頭の場合はSOSサービスへ通知
+                    AppData.sosNoticeAlertService?.checkSosAlertShow()
                 }
             }
         }
@@ -449,26 +464,25 @@ class LongTimeStopAlertService : Service() {
             if (isDialogShowing()) {
                 alertDialog.dismiss()
             }
-            val currentAlertData = longTimeStopAlertLinkedQueue.peek()
-            if (currentAlertData != null) {
-                if (!isFromOtherDialog) {
+            val currentItem = AlertQueue.queue.peek()
+            if (currentItem != null && currentItem.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
+                val currentAlertData = currentItem.longTimeStopData
+                if (!isFromOtherDialog && currentAlertData != null) {
                     val prefix = this.alertInfoPhonePath + currentAlertData.fileFullName
-                    //センタ側のファイルを削除しておりましたが不要です。
-                    //val isDeleteSuccess = awsRepository.deleteLongTimeStopFile(alertInfoBucketName, prefix)
                     val sdf = getCurrentDateWithFormate("yyyyMMdd")
                     val currentDate = sdf.format(Date())
                     val alertFilePath = "${AppData.mainContext!!.getExternalFilesDir(null)?.absolutePath.toString()}/${AppData.userInfo!!.userId}/$currentDate/"
                     FileUtil.write(prefix, alertFilePath, currentAlertData.fileFullName, false)
-                    //if (isDeleteSuccess)
-                    longTimeStopAlertLinkedQueue.poll()
                 }
-                val nextAlertData = longTimeStopAlertLinkedQueue.peek()
-                if (nextAlertData != null) {
-                    if (AppData.sosNoticeAlertService?.checkDialogTime(nextAlertData.longTimeStopOccurrenceTime) != false) {
+                // 処理済みのデータをキューから削除し次を確認
+                AlertQueue.queue.poll()
+                val next = AlertQueue.queue.peek()
+                if (next != null) {
+                    if (next.type == NOTIFICATION_TYPE_LONGTIMESTOP) {
                         displayAlert()
+                    } else {
+                        AppData.sosNoticeAlertService?.checkSosAlertShow()
                     }
-                } else {
-                    AppData.sosNoticeAlertService?.checkDialogTime("")
                 }
             }
         } catch (e: Exception) {
@@ -479,9 +493,10 @@ class LongTimeStopAlertService : Service() {
     }
 
     fun displayAlertCheck() {
-        if (longTimeStopAlertLinkedQueue.isNotEmpty()) {
-            val showLongTimeStopData = longTimeStopAlertLinkedQueue.peek()
-            if (AppData.sosNoticeAlertService?.checkDialogTime(showLongTimeStopData!!.longTimeStopOccurrenceTime) == false) {
+        if (AlertQueue.queue.isNotEmpty()) {
+            val first = AlertQueue.queue.peek()
+            if (first.type != NOTIFICATION_TYPE_LONGTIMESTOP) {
+                AppData.sosNoticeAlertService?.checkSosAlertShow()
                 return
             }
             (AppData.mainContext as MainActivity).runOnUiThread {
@@ -493,12 +508,15 @@ class LongTimeStopAlertService : Service() {
      * 長時間停止ダイアログの表示
      */
     private fun displayAlert() {
-        //アラートがある
-        if (longTimeStopAlertLinkedQueue.size > 0) {
-            alertDialog = IOSDialog.Builder(AppData.mainContext!!)
-            //アラートキューの読み取り
-            val showLongTimeStopData = longTimeStopAlertLinkedQueue.peek()
+        if (AlertQueue.queue.isNotEmpty()) {
+            val first = AlertQueue.queue.peek()
+            if (first.type != NOTIFICATION_TYPE_LONGTIMESTOP) {
+                AppData.sosNoticeAlertService?.checkSosAlertShow()
+                return
+            }
+            val showLongTimeStopData = first.longTimeStopData
             if (showLongTimeStopData != null) {
+                alertDialog = IOSDialog.Builder(AppData.mainContext!!)
                 val dialogTitle = MessageUtil.get(
                     AppData.mainContext!!,
                     R.string.EJT0023,
@@ -528,7 +546,7 @@ class LongTimeStopAlertService : Service() {
                                 teamName = showLongTimeStopData.teamName,
                                 userName = AppData.userInfo!!.userId,
                                 time = showLongTimeStopData.longTimeStopOccurrenceTime,
-                                alertType = ""
+                                alertType = "",
                             )
                         )
                         doNextAlert("btnLongTimeStopAlertGoAdminTool")
@@ -569,21 +587,6 @@ class LongTimeStopAlertService : Service() {
     fun isDialogShowing(): Boolean {
         // 長時間停止ダイアログが表示中かどうか
         return alertDialog.isShowing()
-    }
-    fun checkDialogTime(time: String): Boolean {
-        if (longTimeStopAlertLinkedQueue.isNotEmpty()) {
-            val currentAlertData = longTimeStopAlertLinkedQueue.peek()
-            if (currentAlertData != null) {
-                if(currentAlertData.longTimeStopOccurrenceTime > time) {
-                    handleNextAlert(true)
-                    return false
-                }
-            }
-        }
-        if (isDialogShowing()) {
-            alertDialog.dismiss()
-        }
-        return true
     }
     private fun doNextAlert(id: String) {
         cancelRepeatAlert()
