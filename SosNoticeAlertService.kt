@@ -44,6 +44,7 @@ class SosNoticeAlertService : Service() {
     private val repeatAlertHandler = Handler(Looper.getMainLooper())
     private var repeatAlertRunnable: Runnable? = null
     private val sosNoticeReminderInterval = AppData.appConfig!!.sosNoticeReminderInterval * 60 * 1000
+
     // Handler で定期実行（Timer 置き換え）
     private val handler = Handler(Looper.getMainLooper())
     private val sosRunnable = object : Runnable {
@@ -58,10 +59,12 @@ class SosNoticeAlertService : Service() {
             }
         }
     }
-    // ダイアログのボタン押下状態
+
+    // ダイアログのボタン押下時の情報
     var onDialogResult: ((args: HistoryItem?) -> Unit)? = null
     // 責任者フラグ
     private var isManage = AppData.userInfo?.isManager == true
+
     /**
      * サービス起動時処理
      */
@@ -185,35 +188,34 @@ class SosNoticeAlertService : Service() {
 
             if (AlertQueue.queue.isNotEmpty()) {
                 val first = AlertQueue.queue.peek()
-                if (first.type == NOTIFICATION_TYPE_SOS) {
-                    if (isDialogShowing()) {
-                        alertDialog.dismiss()
-                    }
-                    if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
-                        if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_SOS)) {
-                            if (AppData.appConfig!!.sosNoticeRepetition) {
-                                playSosAlert()
-                            }
-                        } else {
-                            playSosAlert()
-                        }
-                        NotificationUtil.createNotification(
-                            AppData.mainContext!!,
-                            NOTIFICATION_TYPE_SOS
-                        )
-                    } else {
+                if (first != null) {
+                    if (first.type == NOTIFICATION_TYPE_SOS) {
                         if (isDialogShowing()) {
-                            if (AppData.appConfig!!.sosNoticeRepetition) {
+                            alertDialog.dismiss()
+                        }
+                        if (!NotificationUtil.isForeground(AppData.mainContext!!)) {
+                            if (NotificationUtil.notificationIsActive(NOTIFICATION_TYPE_SOS)) {
+                                if (AppData.appConfig!!.sosNoticeRepetition) {
+                                    playSosAlert()
+                                }
+                            } else {
                                 playSosAlert()
                             }
+                            NotificationUtil.createNotification(AppData.mainContext!!, NOTIFICATION_TYPE_SOS)
                         } else {
-                            playSosAlert()
-                            sosAlertShow()
+                            if (isDialogShowing()) {
+                                if (AppData.appConfig!!.sosNoticeRepetition) {
+                                    playSosAlert()
+                                }
+                            } else {
+                                playSosAlert()
+                                sosAlertShow()
+                            }
                         }
+                    } else {
+                        // 長時間停止通知が先頭の場合はそちらを表示
+                        AppData.longTimeStopAlertService?.displayAlertCheck()
                     }
-                } else {
-                    // 長時間停止通知が先頭の場合はそちらを表示
-                    AppData.longTimeStopAlertService?.displayAlertCheck()
                 }
             }
         }
@@ -240,22 +242,25 @@ class SosNoticeAlertService : Service() {
      * SOS緊急通知のダイアログ表示チェック
      */
     fun checkSosAlertShow() {
-        if (!isDialogShowing()){
+        if (!isDialogShowing()) {
             sosAlertShow()
         }
     }
+
     /**
      * SOS緊急通知ダイアログの表示
      */
     private fun sosAlertShow() {
         if (AlertQueue.queue.isNotEmpty()) {
             val first = AlertQueue.queue.peek()
-            if (first.type != NOTIFICATION_TYPE_SOS) {
-                AppData.longTimeStopAlertService?.displayAlertCheck()
-                return
-            }
-            (AppData.mainContext as MainActivity).runOnUiThread {
-                displayAlert()
+            if (first != null) {
+                if (first.type != NOTIFICATION_TYPE_SOS) {
+                    AppData.longTimeStopAlertService?.displayAlertCheck()
+                    return
+                }
+                (AppData.mainContext as MainActivity).runOnUiThread {
+                    displayAlert()
+                }
             }
         }
     }
@@ -263,7 +268,7 @@ class SosNoticeAlertService : Service() {
     /**
      * 次のSOS通知表示処理
      */
-    private fun handleNextAlert(isFromOtherDialog: Boolean) {
+    private fun handleNextAlert() {
         try {
             if (isDialogShowing()) {
                 alertDialog.dismiss()
@@ -271,7 +276,7 @@ class SosNoticeAlertService : Service() {
             val currentItem = AlertQueue.queue.peek()
             if (currentItem != null && currentItem.type == NOTIFICATION_TYPE_SOS) {
                 val currentAlertData = currentItem.sosNoticeData
-                if (!isFromOtherDialog && currentAlertData != null) {
+                if (currentAlertData != null) {
                     val prefix = this.alertInfoLogPath + currentAlertData.fileFullName
                     val currentDate = getCurrentDateWithFormate("yyyyMMdd")
                     val alertFilePath = "${AppData.mainContext!!.getExternalFilesDir(null)?.absolutePath.toString()}/${AppData.userInfo!!.userId}/$currentDate/"
@@ -286,8 +291,6 @@ class SosNoticeAlertService : Service() {
                     } else {
                         AppData.longTimeStopAlertService?.displayAlertCheck()
                     }
-                } else {
-                    AppData.longTimeStopAlertService?.displayAlertCheck()
                 }
             }
         } catch (e: Exception) {
@@ -301,7 +304,7 @@ class SosNoticeAlertService : Service() {
      */
     private fun displayAlert() {
         if (AlertQueue.queue.isNotEmpty()) {
-            val first = AlertQueue.queue.peek()
+            val first = AlertQueue.queue.peek() ?: return
             if (first.type != NOTIFICATION_TYPE_SOS) {
                 AppData.longTimeStopAlertService?.displayAlertCheck()
                 return
@@ -366,6 +369,7 @@ class SosNoticeAlertService : Service() {
         }
         repeatAlertHandler.postDelayed(repeatAlertRunnable!!, (sosNoticeReminderInterval).toLong())
     }
+
     /**
      * ダイアログが閉じられた際に繰り返し通知を停止する。
      */
@@ -375,9 +379,12 @@ class SosNoticeAlertService : Service() {
             repeatAlertRunnable = null
         }
     }
+
     private fun isDialogShowing(): Boolean {
         // 緊急通知ダイアログが表示中かどうか
         return alertDialog.isShowing()
+    }
+
     /**
      * ログインユーザーが本日閉じた通知ファイルを取得する
      * パスが同じであるため、長時間停止のファイルも一緒に取得される
@@ -398,7 +405,7 @@ class SosNoticeAlertService : Service() {
 
     private fun doNextAlert(id: String) {
         cancelRepeatAlert()
-        handleNextAlert(false)
+        handleNextAlert()
         LoggerHelper.writeOppLogger(
             OppLoggerTypeEnum.OPP_SOS_NOTICE_ALERT,
             null,
