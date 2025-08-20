@@ -1,0 +1,948 @@
+//
+// Source code recreated from a .class file by IntelliJ IDEA
+// (powered by FernFlower decompiler)
+//
+
+package jp.co.asterisk.asreader.barcodemanager;
+
+import android.content.Context;
+import android.util.Log;
+import androidx.annotation.IntRange;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import jp.co.asterisk.asreader.a24d.communicationmanager.CommunicationBarcodeCallback;
+import jp.co.asterisk.asreader.a24d.communicationmanager.CommunicationManager;
+import jp.co.asterisk.asreader.a24d.communicationmanager.packet.PacketModel;
+import jp.co.asterisk.asreader.a24d.utility.LogLevel;
+import jp.co.asterisk.asreader.a24d.utility.SDKLog;
+import jp.co.asterisk.asreader.a24d.utility.SDKSharedData;
+import jp.co.asterisk.asreader.barcodemanager.StringEncoder.StringEncodeType;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeConst;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeManagerError;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeResult;
+import jp.co.asterisk.asreader.barcodemanager.define.OCR;
+import jp.co.asterisk.asreader.barcodemanager.define.SSICommandModel;
+import jp.co.asterisk.asreader.barcodemanager.define.SecurityLevels;
+import jp.co.asterisk.asreader.barcodemanager.define.Symbology;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeConst.BarcodeCommandAction;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeConst.BarcodeSettings;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeConst.QREncodeMode;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeConst.SystemBeepSoundType;
+import jp.co.asterisk.asreader.barcodemanager.define.BarcodeResult.Result;
+import jp.co.asterisk.asreader.barcodemanager.define.SSICommandModel.SSICommand;
+import jp.co.asterisk.asreader.barcodemanager.define.SSICommandModel.SSIParameter;
+import jp.co.asterisk.asreader.barcodemanager.define.SSICommandModel.SystemBeep;
+import jp.co.asterisk.asreader.barcodemanager.define.SecurityLevels.SecurityLevel;
+import jp.co.asterisk.asreader.barcodemanager.model.OCRInfoModel;
+import jp.co.asterisk.asreader.barcodemanager.model.SecurityInfoModel;
+import jp.co.asterisk.asreader.barcodemanager.parse.BarcodePacketParser;
+import jp.co.asterisk.asreader.barcodemanager.parse.BarcodePacketParserCallback;
+
+public class BarcodeManager implements CommunicationBarcodeCallback, BarcodePacketParserCallback {
+    private static final String TAG = "【AsReaderSDK】" + BarcodeManager.class.getSimpleName();
+    private static final String TAG_TEST = "【AsReaderSDKBarcodeManagerTEST】" + BarcodeManager.class.getSimpleName();
+    private static final String TAG_SYMBOLDATA_TEST = "【AsReaderSDKBarcodeManagerSymbolTEST】" + BarcodeManager.class.getSimpleName();
+    private static final String KEY_DECODE_MODE = "key_DecodeMode";
+    private static final String KEY_ENCODE_MODE = "key_EncodeMode";
+    private static BarcodeManager instance;
+    private BarcodeManagerCallback mCallback;
+    private BarcodeResult.Result mScanDataFormatType;
+    private BarcodeConst.BarcodeSettings mCharacterType;
+    private PacketModel mSSIPacket;
+    private BarcodeConst.BarcodeCommandAction mSSICommandAction;
+    private boolean isSendCharacterAction;
+    private InitializeProgress mInitProcess;
+    private OCRPrerequisite mOCRPrerequisite;
+    private BarcodeResult ocrSetResult;
+    private static final String KEY_SAVE_SYSTEM_BEEP = "keySaveSystemBeep";
+
+    private BarcodeManager() {
+        this.mScanDataFormatType = Result.UNKNOWN;
+        this.mCharacterType = BarcodeSettings.CHARACTER_NONE;
+        this.mSSIPacket = null;
+        this.mSSICommandAction = BarcodeCommandAction.UNSET;
+        this.isSendCharacterAction = false;
+        this.mInitProcess = BarcodeManager.InitializeProgress.UNTREATED;
+        this.mOCRPrerequisite = BarcodeManager.OCRPrerequisite.FINISH;
+        BarcodePacketParser.getInstance().setCallback(this);
+    }
+
+    public static BarcodeManager getInstance() {
+        if (instance == null) {
+            instance = new BarcodeManager();
+        }
+
+        return instance;
+    }
+
+    public BarcodeConst.BarcodeSettings getCharacterStatus() {
+        return this.mCharacterType;
+    }
+
+    public void setCallback(BarcodeManagerCallback callback) {
+        this.mCallback = callback;
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "Barcode manager callback set");
+    }
+
+    public void setDecodeMode(BarcodeConst.BarcodeSettings mode) {
+        SDKSharedData.getInstance().putString("key_DecodeMode", mode.toString());
+    }
+
+    public BarcodeConst.BarcodeSettings getDecodeMode() {
+        try {
+            String string = SDKSharedData.getInstance().getString("key_DecodeMode", BarcodeSettings.DECODE_MODE_SINGLE.toString());
+            return BarcodeSettings.valueOf(string);
+        } catch (Exception var2) {
+            return BarcodeSettings.DECODE_MODE_SINGLE;
+        }
+    }
+
+    public void setEncodeMode(BarcodeConst.QREncodeMode mode) {
+        int value = mode.ordinal();
+        SDKSharedData.getInstance().putInt("key_EncodeMode", value);
+    }
+
+    public BarcodeConst.QREncodeMode getEncodeMode() {
+        int value = SDKSharedData.getInstance().getInt("key_EncodeMode", 0);
+        BarcodeConst.QREncodeMode[] modeArray = QREncodeMode.values();
+        return modeArray[value];
+    }
+
+    public void initialize(Context context) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "initialize");
+        CommunicationManager.getInstance().setCommunicationBarcodeCallback(this);
+    }
+
+    public void startDecode() {
+        BarcodeConst.BarcodeSettings mode = this.getDecodeMode();
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "startDecode : Mode = " + mode);
+        switch (mode) {
+            case DECODE_MODE_SINGLE:
+                this.startDecode(1, 0);
+                break;
+            case DECODE_MODE_CONTINUOUS:
+                this.startDecode(255, 0);
+        }
+
+    }
+
+    public void startDecode(@IntRange(from = 0L,to = 255L) int count, @IntRange(from = 0L,to = 255L) int time) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "startDecode");
+        if (count >= 0 && count <= 255 && time >= 0 && time <= 255) {
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().create(BarcodeCommandType.START_DECODE);
+            packetModel.setPayload(new byte[]{2, (byte)count, (byte)time, 0, 0});
+            this.sendPacket(packetModel);
+        }
+    }
+
+    public void stopDecode() {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "stopDecode");
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().create(BarcodeCommandType.STOP_DECODE);
+        this.sendPacket(packetModel);
+    }
+
+    public void factoryDefault() {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "factoryDefault");
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().create(BarcodeCommandType.FACTORY_DEFAULT);
+        this.sendPacket(packetModel);
+    }
+
+    public void getStopCondition() {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "DeviceManager getStopCondition");
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().create(BarcodeCommandType.GET_STOP_CONDITION);
+        this.sendPacket(packetModel);
+    }
+
+    public void setBarcodeSettings(BarcodeConst.MemoryType memoryType, BarcodeConst.BarcodeSettings settingsType) {
+        this.mCharacterType = settingsType;
+        switch (settingsType) {
+            case CHARACTER_CODE_ID_SYMBOL:
+            case CHARACTER_CODE_ID_AIM:
+            case CHARACTER_NONE:
+                this.isSendCharacterAction = true;
+            default:
+                Log.d(TAG_TEST, "isSendCharacterAction : " + (this.isSendCharacterAction ? "True" : "False"));
+                this.mSSICommandAction = BarcodeCommandAction.SETTINGS_CHARACTER_STATUS;
+                byte[] bytes = BarcodeCommandFactory.getInstance().create(settingsType);
+                byte[] sendBytes = new byte[bytes.length];
+                int count = 0;
+
+                for(byte buf : bytes) {
+                    sendBytes[count] = buf;
+                    ++count;
+                }
+
+                PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), sendBytes);
+                this.sendSSIPacket(packetModel);
+        }
+    }
+
+    public void setPresentationMode(BarcodeConst.MemoryType memoryType, BarcodeConst.BarcodeSettings settingsType) {
+        if (settingsType == BarcodeSettings.TRIGGER_PRESENTATION || settingsType == BarcodeSettings.TRIGGER_STANDARD) {
+            this.mSSICommandAction = BarcodeCommandAction.SETTINGS_PRESENTATION_MODE;
+            byte[] bytes = BarcodeCommandFactory.getInstance().create(settingsType);
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), bytes);
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void getPresentationMode() {
+        this.mSSICommandAction = BarcodeCommandAction.GET_INFO_PRESENTATION_MODE;
+        byte[] bytes = BarcodeCommandFactory.getInstance().create(BarcodeSettings.PRESENTATION_GET);
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+        this.sendSSIPacket(packetModel);
+    }
+
+    public void getBarcodeSettings(BarcodeConst.BarcodeSettings settingsType) {
+        this.isSendCharacterAction = true;
+        switch (settingsType) {
+            default:
+                this.isSendCharacterAction = false;
+            case CHARACTER_CODE_ID_SYMBOL:
+            case CHARACTER_CODE_ID_AIM:
+            case CHARACTER_NONE:
+                this.mSSICommandAction = BarcodeCommandAction.GET_INFO_CHARACTER_STATUS;
+                byte[] bytes = BarcodeCommandFactory.getInstance().create(settingsType);
+                PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+                this.sendSSIPacket(packetModel);
+        }
+    }
+
+    public void setSymbologyAllEnable(BarcodeConst.MemoryType memoryType, boolean isEnable) {
+        ArrayList<SymbologyInfoModel> sendList = new ArrayList();
+
+        for(Symbology symbol : Symbology.values()) {
+            SymbologyInfoModel model = new SymbologyInfoModel(symbol, isEnable);
+            Log.d(TAG_TEST, "Symbol = " + model.symbology + "  Enable = " + (model.isEnableStatus ? "TRUE" : "FALSE"));
+            sendList.add(model);
+        }
+
+        this.setSymbologySettings(memoryType, sendList);
+    }
+
+    public void setSymbologySettings(BarcodeConst.MemoryType memoryType, Symbology symbology, boolean isEnable) {
+        SymbologyInfoModel model = new SymbologyInfoModel(symbology, isEnable);
+        ArrayList<SymbologyInfoModel> infoModelArrayList = new ArrayList();
+        infoModelArrayList.add(model);
+        this.setSymbologySettings(memoryType, infoModelArrayList);
+    }
+
+    public void setSymbologySettings(BarcodeConst.MemoryType memoryType, ArrayList<SymbologyInfoModel> symbologyInfoList) {
+        ArrayList<SymbologyInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(SymbologyInfoModel symbolInfo : symbologyInfoList) {
+            array.add(symbolInfo);
+
+            for(byte buf : symbolInfo.symbology.getHexCommand()) {
+                byteArray.add(buf);
+            }
+
+            byte byteEnableStatus = (byte)(symbolInfo.isEnableStatus ? 1 : 0);
+            byteArray.add(byteEnableStatus);
+            Log.d(TAG_SYMBOLDATA_TEST, "Symbol : " + symbolInfo.symbology);
+            Log.d(TAG_SYMBOLDATA_TEST, "[Symbol Byte] : " + this.convertStringFromByteArray(symbolInfo.symbology.getHexCommand()) + "  [Enable status] : " + String.format("%02X", byteEnableStatus));
+        }
+
+        BarcodePacketParser.getInstance().setSymbologyInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(bytes));
+            this.mSSICommandAction = BarcodeCommandAction.SETTINGS_SYMBOLOGIES;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), bytes);
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(packetModel.toByteArray()));
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void setOCRSettings(BarcodeConst.MemoryType memoryType, OCR ocr, boolean isEnable) {
+        OCRInfoModel model = new OCRInfoModel(ocr, isEnable);
+        ArrayList<OCRInfoModel> infoModelArrayList = new ArrayList();
+        infoModelArrayList.add(model);
+        this.setOCRSettings(memoryType, infoModelArrayList);
+    }
+
+    public void setOCRSettings(BarcodeConst.MemoryType memoryType, ArrayList<OCRInfoModel> ocrInfoList) {
+        ArrayList<OCRInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(OCRInfoModel ocrInfo : ocrInfoList) {
+            array.add(ocrInfo);
+
+            for(byte buf : ocrInfo.ocr.getHexCommand()) {
+                byteArray.add(buf);
+            }
+
+            byte byteEnableStatus = (byte)(ocrInfo.isEnableStatus ? 1 : 0);
+            byteArray.add(byteEnableStatus);
+            Log.d(TAG_SYMBOLDATA_TEST, "Symbol : " + ocrInfo.ocr);
+            Log.d(TAG_SYMBOLDATA_TEST, "[Symbol Byte] : " + this.convertStringFromByteArray(ocrInfo.ocr.getHexCommand()) + "  [Enable status] : " + String.format("%02X", byteEnableStatus));
+        }
+
+        BarcodePacketParser.getInstance().setOCRInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(bytes));
+            this.mSSICommandAction = BarcodeCommandAction.SETTING_OCR;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), bytes);
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(packetModel.toByteArray()));
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void getSymbologySettings(Symbology symbology) {
+        ArrayList<Symbology> symbolArrayList = new ArrayList();
+        symbolArrayList.add(symbology);
+        this.getSymbologySettings(symbolArrayList);
+    }
+
+    public void getSymbologySettings(ArrayList<Symbology> symbologyList) {
+        ArrayList<SymbologyInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(Symbology symbol : symbologyList) {
+            Log.d(TAG_TEST, "【Request】getSymbologySettings : " + symbol);
+            SymbologyInfoModel model = new SymbologyInfoModel(symbol, true);
+            array.add(model);
+
+            for(byte commandByte : symbol.getHexCommand()) {
+                byteArray.add(commandByte);
+            }
+        }
+
+        BarcodePacketParser.getInstance().setSymbologyInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            this.mSSICommandAction = BarcodeCommandAction.GET_INFO_SYMBOLOGIES_ENABLE_STATUS;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void getOCRSettings(OCR ocr) {
+        ArrayList<OCR> ocrArrayList = new ArrayList();
+        ocrArrayList.add(ocr);
+        this.getOCRSettings(ocrArrayList);
+    }
+
+    public void getOCRSettings(ArrayList<OCR> ocrList) {
+        ArrayList<OCRInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(OCR symbol : ocrList) {
+            Log.d(TAG_TEST, "【Request】getOCRSettings : " + symbol);
+            OCRInfoModel model = new OCRInfoModel(symbol, true);
+            array.add(model);
+
+            for(byte commandByte : symbol.getHexCommand()) {
+                byteArray.add(commandByte);
+            }
+        }
+
+        BarcodePacketParser.getInstance().setOCRInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            this.mSSICommandAction = BarcodeCommandAction.GET_INFO_OCR_ENABLE_STATUS;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void setSecurityLevelSettings(BarcodeConst.MemoryType memoryType, SecurityLevels.SecurityLevelType securityLevelType, SecurityLevels.SecurityLevel securityLevel) {
+        SecurityInfoModel model = new SecurityInfoModel(securityLevelType, securityLevel);
+        ArrayList<SecurityInfoModel> infoModelArrayList = new ArrayList();
+        infoModelArrayList.add(model);
+        this.setSecurityLevelSettings(memoryType, infoModelArrayList);
+    }
+
+    public void setSecurityLevelSettings(BarcodeConst.MemoryType memoryType, ArrayList<SecurityInfoModel> securityInfoList) {
+        ArrayList<SecurityInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(SecurityInfoModel securityInfo : securityInfoList) {
+            array.add(securityInfo);
+
+            for(byte buf : securityInfo.securityLevelType.getHexCommand()) {
+                byteArray.add(buf);
+            }
+
+            byte byteSecurityStatus = (byte)securityInfo.securityLevel.getNum();
+            byteArray.add(byteSecurityStatus);
+        }
+
+        BarcodePacketParser.getInstance().setSecurityInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(bytes));
+            this.mSSICommandAction = BarcodeCommandAction.SETTING_SECURITY_LEVEL;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), bytes);
+            Log.d(TAG_TEST, "Send Data = " + this.convertStringFromByteArray(packetModel.toByteArray()));
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void getSecurityLevelSettings(ArrayList<SecurityLevels.SecurityLevelType> securityLevelTypeList) {
+        ArrayList<SecurityInfoModel> array = new ArrayList();
+        ArrayList<Byte> byteArray = new ArrayList();
+
+        for(SecurityLevels.SecurityLevelType symbol : securityLevelTypeList) {
+            Log.d(TAG_TEST, "【Request】getSecurityLevelSettings : " + symbol);
+            SecurityInfoModel model = new SecurityInfoModel(symbol, SecurityLevel.LEVEL_1);
+            array.add(model);
+
+            for(byte commandByte : symbol.getHexCommand()) {
+                byteArray.add(commandByte);
+            }
+        }
+
+        BarcodePacketParser.getInstance().setSecurityInfoArray(array);
+        if (byteArray.size() > 0) {
+            byte[] bytes = new byte[byteArray.size()];
+
+            for(int i = 0; i < byteArray.size(); ++i) {
+                bytes[i] = (Byte)byteArray.get(i);
+            }
+
+            this.mSSICommandAction = BarcodeCommandAction.GET_INFO_SECURITY_LEVEL_ENABLE_STATUS;
+            PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+            this.sendSSIPacket(packetModel);
+        }
+
+    }
+
+    public void getFormatStatus() {
+        this.mSSICommandAction = BarcodeCommandAction.GET_INFO_SCAN_DATA_TRANSMISSION_FORMAT;
+        byte[] bytes = BarcodeCommandFactory.getInstance().create(BarcodeSettings.PREFIX_STATUS);
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+        this.sendSSIPacket(packetModel);
+    }
+
+    public BarcodeConst.SystemBeepSoundType getSystemBeep() {
+        switch (this.getSaveSystemBeepValue()) {
+            case SHORT_HIGH:
+                return SystemBeepSoundType.TYPE1;
+            case SHORT_LOW:
+                return SystemBeepSoundType.TYPE2;
+            case LONG_HIGH:
+                return SystemBeepSoundType.TYPE3;
+            case LONG_LOW:
+                return SystemBeepSoundType.TYPE4;
+            case FAST_WARBLE:
+                return SystemBeepSoundType.TYPE5;
+            case SLOW_WARBLE:
+                return SystemBeepSoundType.TYPE6;
+            case HIGH_CLICK:
+                return SystemBeepSoundType.TYPE7;
+            case LOW_CLICK:
+                return SystemBeepSoundType.TYPE8;
+            default:
+                return SystemBeepSoundType.NONE;
+        }
+    }
+
+    public void setSystemBeep(BarcodeConst.SystemBeepSoundType type) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "BarcodeManager setSystemBeep");
+        this.mSSICommandAction = BarcodeCommandAction.SETTINGS_SYSTEM_BEEP;
+        SSICommandModel.SystemBeep beepType = SystemBeep.getSystemBeepValue(type);
+        this.saveSystemBeepValue(beepType);
+    }
+
+    public void setNotisEditing(BarcodeConst.MemoryType memoryType, boolean isEnabled) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "BarcodeManager setNotisEditing");
+        this.mSSICommandAction = BarcodeCommandAction.SETTINGS_NOTIS_EDITING;
+        byte enableByte = isEnabled ? SSIParameter.RESPONSE_ENABLE.getCommand() : SSIParameter.RESPONSE_DISABLE.getCommand();
+        byte[] bytes = new byte[]{SSICommand.NOTIS_EDITING.getCommand(), enableByte};
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createSetSSIParam(memoryType.getCommand(), this.getSaveSystemBeepValue().getCommand(), bytes);
+        this.sendSSIPacket(packetModel);
+    }
+
+    public void getNotisEditing() {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "BarcodeManager getNotisEditing");
+        this.mSSICommandAction = BarcodeCommandAction.GET_INFO_NOTIS_EDITING;
+        byte[] bytes = BarcodeCommandFactory.getInstance().create(BarcodeSettings.NOTIS_EDITING);
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(bytes);
+        this.sendSSIPacket(packetModel);
+    }
+
+    public void zebraBarcodeUpdate() {
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createUpdateCmd((byte[])null);
+        this.sendSSIPacket(packetModel);
+    }
+
+    private void startInitializeProcess() {
+        switch (this.mInitProcess) {
+            case UNTREATED:
+                this.checkCodeIdEnable();
+                this.mInitProcess = BarcodeManager.InitializeProgress.GET_STATUS_CODE_ID;
+                break;
+            case GET_STATUS_CODE_ID:
+                this.getFormatStatus();
+                this.mInitProcess = BarcodeManager.InitializeProgress.GET_CHARACTER_STATUS;
+                break;
+            case GET_CHARACTER_STATUS:
+                this.mInitProcess = BarcodeManager.InitializeProgress.GET_STATUS_FORMAT;
+                this.getBarcodeSettings(BarcodeSettings.CHARACTER_GET);
+                break;
+            case GET_STATUS_FORMAT:
+                this.mInitProcess = BarcodeManager.InitializeProgress.FINISH;
+            case FINISH:
+        }
+
+        if (this.mInitProcess == BarcodeManager.InitializeProgress.FINISH && this.mCallback != null) {
+            this.mCallback.onBarcodeManagerStandByReady();
+        }
+
+    }
+
+    private void startOCRPrerequisite() {
+        byte[] data = null;
+        switch (this.mOCRPrerequisite) {
+            case RSM_GET_PACKETSIZE:
+                data = new byte[]{10, -128, 4, 0, 0, 6, 32, 0, -1, -1, -3, 78};
+                this.sendBypassCmd(data);
+                this.mOCRPrerequisite = BarcodeManager.OCRPrerequisite.ATTRIBUTE_STORE;
+                break;
+            case ATTRIBUTE_STORE:
+                data = new byte[]{27, -128, 4, 0, 0, 23, 6, 0, 2, 35, 65, 7, 66, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -2, -119};
+                this.sendBypassCmd(data);
+                this.mOCRPrerequisite = BarcodeManager.OCRPrerequisite.ATTRIBUTE_GET;
+                break;
+            case ATTRIBUTE_GET:
+                data = new byte[]{10, -128, 4, 0, 0, 6, 2, 0, 2, 35, -1, 69};
+                this.sendBypassCmd(data);
+                this.mOCRPrerequisite = BarcodeManager.OCRPrerequisite.FINISH;
+            case FINISH:
+        }
+
+        if (this.mOCRPrerequisite == BarcodeManager.OCRPrerequisite.FINISH && this.mCallback != null) {
+            this.mCallback.onReceivedResponse(BarcodeCommandAction.SETTING_OCR, this.ocrSetResult);
+        }
+
+    }
+
+    private void checkCodeIdEnable() {
+        SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "checkCodeIdEnable");
+        this.mSSICommandAction = BarcodeCommandAction.GET_INFO_CODE_ID_ENABLE;
+        byte[] param = new byte[]{SSICommand.CHARACTER.getCommand()};
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createGetSSIParam(param);
+        this.sendSSIPacket(packetModel);
+    }
+
+    private void sendSSIPacket(PacketModel packetModel) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Debug, "sendSSIPacket");
+        this.mSSIPacket = packetModel;
+        if (!CommunicationManager.getInstance().sendPacket(packetModel)) {
+            SDKLog.getInstance().Log(TAG, LogLevel.Error, "Failed to send packet.");
+        }
+
+    }
+
+    private void sendPacket(PacketModel packetModel) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Debug, "sendPacket");
+        if (!CommunicationManager.getInstance().sendPacket(packetModel)) {
+            SDKLog.getInstance().Log(TAG, LogLevel.Error, "Failed to send packet.");
+            if (this.mCallback != null) {
+                this.mCallback.onBarcodeManagerError(BarcodeManagerError.COMMAND_ERROR_COMMAND_SEND_FAILED);
+            }
+        }
+
+    }
+
+    private void sendBypassCmd(byte[] data) {
+        StringBuilder buf = new StringBuilder();
+
+        for(byte byteBuf : data) {
+            buf.append(String.format("%02X ", byteBuf));
+        }
+
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "BYPASS TX : " + buf.toString());
+        PacketModel packetModel = BarcodeCommandFactory.getInstance().createBypassCmd(data);
+        this.sendPacket(packetModel);
+    }
+
+    private String convertBarcodeData(byte[] data) {
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "parseBarcodeData Mode = " + this.getEncodeMode());
+        StringEncoder encoder = StringEncoder.getInstance();
+        StringEncoder.StringEncodeType type = StringEncodeType.getEncodeMode(this.getEncodeMode());
+        if (type == StringEncodeType.AUTO) {
+            type = encoder.checkIncludeCharacter(data);
+        }
+
+        return type != StringEncodeType.UNKNOWN ? encoder.encodeByteData(data, encoder.getEncodeTypeString(type)) : null;
+    }
+
+    private String convertStringFromByteArray(byte[] bytes) {
+        if (bytes == null) {
+            return "";
+        } else {
+            StringBuilder buf = new StringBuilder();
+
+            for(byte byteBuf : bytes) {
+                buf.append(String.format("%02X ", byteBuf));
+            }
+
+            return buf.toString();
+        }
+    }
+
+    private String convertStringFromByteArray(Byte[] bytes) {
+        if (bytes == null) {
+            return "";
+        } else {
+            StringBuilder buf = new StringBuilder();
+
+            for(Byte byteBuf : bytes) {
+                buf.append(String.format("%02X ", byteBuf));
+            }
+
+            return buf.toString();
+        }
+    }
+
+    public void onReceivedData(PacketModel packetModel, boolean isSSI) {
+        String commandStr = String.format("%02X", packetModel.getCommand());
+        SDKLog.getInstance().Log(TAG, LogLevel.Information, "onReceivedData : " + commandStr);
+        if (isSSI) {
+            SDKLog.getInstance().Log(TAG, LogLevel.Information, "!!!!!!!! SSI Parse !!!!!!!!\n" + this.mSSICommandAction);
+            BarcodePacketParser.getInstance().parseSSIPacket(packetModel, this.mSSIPacket, this.mSSICommandAction);
+        } else {
+            SDKLog.getInstance().Log(TAG, LogLevel.Information, "!!!!!!!! Normal Parse !!!!!!!!");
+            BarcodePacketParser.getInstance().parsePacket(packetModel);
+        }
+
+    }
+
+    public void onExecuteTriggerAutoMode(boolean executeMode) {
+        if (executeMode) {
+            this.startDecode();
+        } else {
+            this.stopDecode();
+        }
+
+    }
+
+    public void onConnectedStatus(boolean status) {
+        if (status) {
+            this.startInitializeProcess();
+        } else {
+            this.mScanDataFormatType = Result.UNKNOWN;
+            this.mInitProcess = BarcodeManager.InitializeProgress.UNTREATED;
+            this.mSSIPacket = null;
+            this.mCharacterType = BarcodeSettings.CHARACTER_NONE;
+            this.mSSICommandAction = BarcodeCommandAction.UNSET;
+            this.isSendCharacterAction = false;
+        }
+
+    }
+
+    public void onParsedBarcodeDecodeData(byte[] decodeData) {
+        if (this.mCallback != null) {
+            this.mCallback.onReceivedBarcodeDecodeData(decodeData);
+            String receiveDataStr = this.convertBarcodeData(decodeData);
+            if (receiveDataStr == null) {
+                return;
+            }
+
+            Map<String, String> retParameter = new HashMap();
+            Map<String, String> trimStrMap = this.trimPrefixAndSuffix(receiveDataStr);
+            if (trimStrMap != null) {
+                for(String key : trimStrMap.keySet()) {
+                    if (!key.contentEquals("Key_ParameterBarcodeString")) {
+                        retParameter.put(key, (String)trimStrMap.get(key));
+                    } else if (trimStrMap.get(key) != null) {
+                        receiveDataStr = (String)trimStrMap.get(key);
+                    }
+                }
+            }
+
+            String barcodeStr = "";
+            switch (this.mCharacterType) {
+                case CHARACTER_CODE_ID_SYMBOL:
+                    assert receiveDataStr != null;
+
+                    String result = receiveDataStr.substring(0, 1);
+                    String symbolStr;
+                    if (result.equals("P")) {
+                        symbolStr = receiveDataStr.substring(0, 3);
+                        barcodeStr = receiveDataStr.substring(3);
+                    } else {
+                        symbolStr = receiveDataStr.substring(0, 1);
+                        barcodeStr = receiveDataStr.substring(1);
+                    }
+
+                    retParameter.put("Key_ParameterSymbol", symbolStr);
+                    break;
+                case CHARACTER_CODE_ID_AIM:
+                    assert receiveDataStr != null;
+
+                    String aimStr = receiveDataStr.substring(0, 3);
+                    barcodeStr = receiveDataStr.substring(3);
+                    retParameter.put("Key_ParameterAIM", aimStr);
+                    break;
+                case CHARACTER_NONE:
+                    barcodeStr = receiveDataStr;
+            }
+
+            this.mCallback.onReceivedBarcodeDecodeData(barcodeStr, retParameter);
+        }
+
+    }
+
+    private Map<String, String> trimPrefixAndSuffix(String payload) {
+        boolean isPrefix = false;
+        boolean isSuffix1 = false;
+        boolean isSuffix2 = false;
+        SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "Payload = " + payload);
+        switch (this.mScanDataFormatType) {
+            case FORMAT_DATA_ONLY:
+            default:
+                break;
+            case FORMAT_PREFIX_DATA:
+                isPrefix = true;
+                break;
+            case FORMAT_DATA_SUFFIX_TYPE1:
+                isSuffix1 = true;
+                break;
+            case FORMAT_DATA_SUFFIX_TYPE2:
+                isSuffix2 = true;
+                break;
+            case FORMAT_DATA_SUFFIX_TYPE3:
+                isSuffix1 = true;
+                isSuffix2 = true;
+                break;
+            case FORMAT_PREFIX_DATA_SUFFIX_TYPE1:
+                isPrefix = true;
+                isSuffix1 = true;
+                break;
+            case FORMAT_PREFIX_DATA_SUFFIX_TYPE2:
+                isPrefix = true;
+                isSuffix2 = true;
+                break;
+            case FORMAT_PREFIX_DATA_SUFFIX_TYPE3:
+                isPrefix = true;
+                isSuffix1 = true;
+                isSuffix2 = true;
+        }
+
+        SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "Prefix = " + (isPrefix ? "True" : "False") + " Suffix1 = " + (isSuffix1 ? "True" : "False") + " Suffix2 = " + (isSuffix2 ? "True" : "False"));
+        if (!isPrefix && !isSuffix1 && !isSuffix2) {
+            return null;
+        } else {
+            Map<String, String> parameter = new HashMap();
+            int barcodeStartIndex = 0;
+            int barcodeEndIndex = payload.length();
+            if (isPrefix) {
+                parameter.put("Key_ParameterPrefix", payload.substring(0, 1));
+                barcodeStartIndex = 1;
+            }
+
+            if (isSuffix1 && !isSuffix2) {
+                int len = payload.length() - 1;
+                parameter.put("Key_ParameterSuffix1", payload.substring(len));
+                barcodeEndIndex = payload.length() - 1;
+            } else if (!isSuffix1 && isSuffix2) {
+                int len = payload.length() - 1;
+                parameter.put("Key_ParameterSuffix2", payload.substring(len));
+                barcodeEndIndex = payload.length() - 1;
+            } else if (isSuffix1 && isSuffix2) {
+                parameter.put("Key_ParameterSuffix1", payload.substring(payload.length() - 2, payload.length() - 2));
+                parameter.put("Key_ParameterSuffix2", payload.substring(payload.length() - 1, payload.length() - 1));
+                barcodeEndIndex = payload.length() - 2;
+            }
+
+            SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "Prefix = " + (String)parameter.get("Key_ParameterPrefix"));
+            SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "Suffix1 = " + (String)parameter.get("Key_ParameterSuffix1"));
+            SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "Suffix2 = " + (String)parameter.get("Key_ParameterSuffix2"));
+            parameter.put("Key_ParameterBarcodeString", payload.substring(barcodeStartIndex, barcodeEndIndex));
+            return parameter;
+        }
+    }
+
+    public void onParsedBarcodeError(BarcodeManagerError error) {
+        if (error == BarcodeManagerError.COMMAND_ERROR_START_DECODE_FAILED) {
+            this.stopDecode();
+        }
+
+        if (this.mCallback != null) {
+            this.mCallback.onBarcodeManagerError(error);
+        }
+
+    }
+
+    public void onParsedBarcodeResponse(BarcodeConst.BarcodeCommandAction action, BarcodeResult result) {
+        switch (action) {
+            case SETTINGS_CHARACTER_STATUS:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "onParsedBarcodeResponse : " + BarcodeCommandAction.SETTINGS_CHARACTER_STATUS + " isSend = " + (this.isSendCharacterAction ? "True" : "False"));
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "mCodeID(Character)Type : " + this.mCharacterType);
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "result : " + result.getResult());
+                switch (this.mCharacterType) {
+                    case CHARACTER_CODE_ID_SYMBOL:
+                        result.setResult(Result.CHARACTER_SYMBOL);
+                        break;
+                    case CHARACTER_CODE_ID_AIM:
+                        result.setResult(Result.CHARACTER_AIM);
+                        break;
+                    case CHARACTER_NONE:
+                        result.setResult(Result.CHARACTER_NONE);
+                }
+
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "mCharacterType = " + this.mCharacterType);
+                if (this.isSendCharacterAction) {
+                    this.isSendCharacterAction = false;
+                }
+                break;
+            case SETTINGS_SYMBOLOGIES:
+                SDKLog.getInstance().Log(TAG_SYMBOLDATA_TEST, LogLevel.Information, "SETTINGS_SYMBOLOGIES : " + BarcodeCommandAction.SETTINGS_SYMBOLOGIES);
+                SDKLog.getInstance().Log(TAG_SYMBOLDATA_TEST, LogLevel.Information, "Status : " + result.getStatus() + " Result : " + result.getResult());
+                break;
+            case SETTING_OCR:
+                this.ocrSetResult = result;
+                this.mOCRPrerequisite = BarcodeManager.OCRPrerequisite.RSM_GET_PACKETSIZE;
+                SDKLog.getInstance().Log(TAG, LogLevel.Information, "SETTING OCR, state : " + this.mOCRPrerequisite.toString());
+                this.startOCRPrerequisite();
+                return;
+            case GET_INFO_CHARACTER_STATUS:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "onParsedBarcodeResponse : " + BarcodeCommandAction.GET_INFO_CHARACTER_STATUS + " isSend = " + (this.isSendCharacterAction ? "True" : "False"));
+                switch (result.getResult()) {
+                    case CHARACTER_NONE:
+                        this.mCharacterType = BarcodeSettings.CHARACTER_NONE;
+                        break;
+                    case CHARACTER_SYMBOL:
+                        this.mCharacterType = BarcodeSettings.CHARACTER_CODE_ID_SYMBOL;
+                        break;
+                    case CHARACTER_AIM:
+                        this.mCharacterType = BarcodeSettings.CHARACTER_CODE_ID_AIM;
+                }
+
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "mCharacterType = " + this.mCharacterType);
+                if (this.isSendCharacterAction) {
+                    this.isSendCharacterAction = false;
+                }
+
+                if (this.mInitProcess != BarcodeManager.InitializeProgress.FINISH) {
+                    this.startInitializeProcess();
+                    return;
+                }
+            case GET_INFO_SYMBOLOGIES_ENABLE_STATUS:
+            case GET_INFO_OCR_ENABLE_STATUS:
+            default:
+                break;
+            case GET_INFO_SCAN_DATA_TRANSMISSION_FORMAT:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "onParsedBarcodeResponse : " + BarcodeCommandAction.GET_INFO_SCAN_DATA_TRANSMISSION_FORMAT);
+                this.mScanDataFormatType = result.getResult();
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "ScanDataFormatType = " + this.mScanDataFormatType);
+                if (this.mInitProcess != BarcodeManager.InitializeProgress.FINISH) {
+                    this.startInitializeProcess();
+                    return;
+                }
+                break;
+            case GET_INFO_STOP_CONDITION:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "GET_INFO_STOP_CONDITION");
+                break;
+            case GET_INFO_CODE_ID_ENABLE:
+                if (this.mInitProcess != BarcodeManager.InitializeProgress.FINISH) {
+                    this.startInitializeProcess();
+                    return;
+                }
+                break;
+            case GET_INFO_NOTIS_EDITING:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "GET_INFO_NOTIS_EDITING");
+                break;
+            case SETTINGS_NOTIS_EDITING:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "SETTING_NOTIS_EDITING");
+                break;
+            case GET_INFO_PRESENTATION_MODE:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "GET_INFO_PRESENTATION_MODE");
+                break;
+            case SETTINGS_PRESENTATION_MODE:
+                SDKLog.getInstance().Log(TAG_TEST, LogLevel.Information, "SETTINGS_PRESENTATION_MODE");
+        }
+
+        if (this.mCallback != null) {
+            this.mCallback.onReceivedResponse(action, result);
+        }
+
+    }
+
+    public void onBypass(BarcodeConst.BarcodeCommandAction action, byte[] data) {
+        switch (action) {
+            case SETTING_OCR:
+                StringBuilder buf = new StringBuilder();
+
+                for(byte byteBuf : data) {
+                    buf.append(String.format("%02X ", byteBuf));
+                }
+
+                SDKLog.getInstance().Log(TAG, LogLevel.Information, "SETTING OCR PARSE : " + buf.toString());
+                this.startOCRPrerequisite();
+            default:
+        }
+    }
+
+    private void saveSystemBeepValue(SSICommandModel.SystemBeep beepType) {
+        SDKSharedData.getInstance().putString("keySaveSystemBeep", beepType.toString());
+    }
+
+    private SSICommandModel.SystemBeep getSaveSystemBeepValue() {
+        String value = SDKSharedData.getInstance().getString("keySaveSystemBeep", SystemBeep.SHORT_LOW.toString());
+
+        try {
+            return SystemBeep.valueOf(value);
+        } catch (Exception var3) {
+            return SystemBeep.SHORT_LOW;
+        }
+    }
+
+    static enum InitializeProgress {
+        UNTREATED,
+        GET_STATUS_CODE_ID,
+        GET_STATUS_FORMAT,
+        GET_CHARACTER_STATUS,
+        FINISH;
+
+        private InitializeProgress() {
+        }
+    }
+
+    static enum OCRPrerequisite {
+        RSM_GET_PACKETSIZE,
+        ATTRIBUTE_STORE,
+        ATTRIBUTE_GET,
+        FINISH;
+
+        private OCRPrerequisite() {
+        }
+    }
+}
